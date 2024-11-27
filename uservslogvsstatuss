@@ -1,0 +1,128 @@
+import pandas as pd
+
+def analyze_employee_statuses(df):
+    """
+    Analyze employee records to find:
+    1. Conflicts where same empid/login_id/emp_type has both deleted Y/N and valid status (A/L)
+    2. All other records that don't meet these criteria
+    
+    Parameters:
+    df (pandas.DataFrame): DataFrame with columns 'empid', 'login_id', 'emp_type', 
+                         'deleted_flag', and 'status'
+    
+    Returns:
+    tuple: (conflict_df, non_conflict_df) - Two DataFrames containing the separated records
+    """
+    # Group by empid, login_id, and emp_type and aggregate values
+    grouped = df.groupby(['empid', 'login_id', 'emp_type']).agg({
+        'deleted_flag': list,
+        'status': list
+    }).reset_index()
+    
+    # Add analysis columns
+    grouped['has_deleted_conflict'] = grouped['deleted_flag'].apply(
+        lambda x: 'Y' in x and 'N' in x
+    )
+    grouped['has_valid_status'] = grouped['status'].apply(
+        lambda statuses: any(s in ['A', 'L'] for s in statuses)
+    )
+    
+    # Separate conflicts and non-conflicts
+    valid_conflicts = grouped[
+        grouped['has_deleted_conflict'] & 
+        grouped['has_valid_status']
+    ].copy()
+    
+    non_conflicts = grouped[
+        ~(grouped['has_deleted_conflict'] & 
+          grouped['has_valid_status'])
+    ].copy()
+    
+    # Process valid conflicts
+    if len(valid_conflicts) > 0:
+        valid_conflicts['has_deleted'] = valid_conflicts['deleted_flag'].apply(
+            lambda x: 'Yes' if 'Y' in x else 'No'
+        )
+        valid_conflicts['has_active'] = valid_conflicts['deleted_flag'].apply(
+            lambda x: 'Yes' if 'N' in x else 'No'
+        )
+        valid_conflicts['status_summary'] = valid_conflicts['status'].apply(
+            lambda x: ', '.join(sorted(set(x)))
+        )
+        valid_conflicts['conflict_type'] = 'Valid Conflict (Has A/L Status)'
+        
+        valid_conflicts = valid_conflicts[[
+            'empid',
+            'login_id', 
+            'emp_type', 
+            'conflict_type', 
+            'has_deleted', 
+            'has_active', 
+            'status_summary'
+        ]]
+    else:
+        valid_conflicts = pd.DataFrame(columns=[
+            'empid',
+            'login_id', 
+            'emp_type', 
+            'conflict_type', 
+            'has_deleted', 
+            'has_active', 
+            'status_summary'
+        ])
+    
+    # Process non-conflicts
+    if len(non_conflicts) > 0:
+        non_conflicts['status_summary'] = non_conflicts['status'].apply(
+            lambda x: ', '.join(sorted(set(x)))
+        )
+        non_conflicts['deleted_flag_summary'] = non_conflicts['deleted_flag'].apply(
+            lambda x: ', '.join(sorted(set(x)))
+        )
+        non_conflicts['reason'] = non_conflicts.apply(
+            lambda row: get_exclusion_reason(row), axis=1
+        )
+        
+        non_conflicts = non_conflicts[[
+            'empid',
+            'login_id', 
+            'emp_type',
+            'status_summary',
+            'deleted_flag_summary',
+            'reason'
+        ]]
+    
+    return valid_conflicts, non_conflicts
+
+def get_exclusion_reason(row):
+    """Helper function to determine why a record was excluded from conflicts"""
+    if not row['has_deleted_conflict']:
+        return "No deleted flag conflict"
+    if not row['has_valid_status']:
+        return "No Active/Leave status found"
+    return "Unknown"
+
+# Example usage
+if __name__ == "__main__":
+    # Create sample data
+    data = {
+        'empid': [100, 100, 100, 100, 101, 102, 102, 103, 103],
+        'login_id': ['user1', 'user1', 'user2', 'user2', 'user3', 'user4', 'user4', 'user5', 'user5'],
+        'emp_type': ['T1', 'T1', 'T2', 'T2', 'T1', 'T1', 'T1', 'T1', 'T1'],
+        'deleted_flag': ['Y', 'N', 'Y', 'N', 'Y', 'Y', 'Y', 'Y', 'N'],
+        'status': ['A', 'L', 'T', 'I', 'I', 'T', 'T', 'T', 'I']
+    }
+    
+    df = pd.DataFrame(data)
+    
+    print("Original Data:")
+    print(df)
+    print("\n1. Valid Conflicts Found (with A/L status):")
+    conflicts, non_conflicts = analyze_employee_statuses(df)
+    print(conflicts)
+    print("\n2. Records Not Meeting Criteria:")
+    print(non_conflicts)
+    
+    # Optionally save to CSV
+    conflicts.to_csv('conflicts.csv', index=False)
+    non_conflicts.to_csv('non_conflicts.csv', index=False)
